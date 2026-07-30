@@ -82,7 +82,7 @@
     <div class="auth-brand">
         <div class="brand-logo"><i class="bi bi-bag-heart-fill"></i></div>
         <h1>Tus boutiques,<br>bien organizada.</h1>
-        <p>Controla productos, categorías y stock desde un solo lugar. Diseñado para mantener tu inventario siempre al día.</p>
+        <p>Controla productos y de todo, categorías y stock desde un solo lugar. Diseñado para mantener tu inventario siempre al día.</p>
         <ul class="auth-features">
             <li><i class="bi bi-box-seam"></i> Gestión completa de productos</li>
             <li><i class="bi bi-bell"></i> Alertas de stock bajo automático</li>
