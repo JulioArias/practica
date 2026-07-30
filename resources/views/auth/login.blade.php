@@ -97,7 +97,7 @@
                 <div class="bq-brand-icon" style="width:54px;height:54px;font-size:1.6rem;"><i class="bi bi-bag-heart-fill"></i></div>
             </div>
             <h2>Bienvenida de nuevo 👋</h2>
-            <p class="sub">Ingresa tus datos para acceder al panel.</p>
+            <p class="sub">Ingresa tus datos para acceder al panel prueba.</p>
 
             <form method="POST" action="{{ route('login') }}">
                 @csrf
