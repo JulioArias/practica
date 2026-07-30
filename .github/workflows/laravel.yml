@@ -80,3 +80,39 @@ jobs:
 
       - name: Run tests
         run: vendor/bin/phpunit --testdox
+
+  deploy:
+    name: Deploy to server
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup SSH agent
+        uses: webfactory/ssh-agent@v0.5.3
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add host to known_hosts
+        run: |
+          ssh-keyscan -H ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Sync files to server
+        run: |
+          rsync -az --delete --exclude='.git' --exclude='.env' --exclude='storage/' --exclude='vendor/' --exclude='node_modules/' ./ ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ secrets.DEPLOY_DIR }}
+
+      - name: Run remote deploy commands
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "set -e; cd '${{ secrets.DEPLOY_DIR }}' && \
+            composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader && \
+            php artisan migrate --force && \
+            php artisan config:cache && \
+            php artisan route:cache && \
+            php artisan view:cache || true; \
+            php artisan queue:restart || true; \
+            # Restart PHP-FPM (try common service names) and Supervisor
+            sudo systemctl restart php8.2-fpm || sudo systemctl restart php8.1-fpm || sudo systemctl restart php-fpm || true; \
+            sudo systemctl restart supervisor || sudo supervisorctl restart all || true"

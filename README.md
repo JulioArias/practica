@@ -11,7 +11,7 @@ Sistema de gestión de inventario para una boutique, desarrollado en **Laravel 1
 - CRUD completo de **Productos** (nombre, SKU, precio, stock, categoría), con búsqueda.
 - Dashboard con totales de productos, categorías, stock y alerta de productos con stock bajo.
 
--hola esta es una prueba de funcionamiento
+- Integración continua y despliegue automático con GitHub Actions.
 
 ## Requisitos
 
