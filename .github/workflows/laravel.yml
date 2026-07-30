@@ -1,15 +1,25 @@
-name: Laravel CI
+name: CI/CD Laravel
 
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
+
+# Evita despliegues concurrentes duplicados
+concurrency:
+  group: laravel-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   test:
-    name: Test on PHP
+    name: Tests (PHP ${{ matrix.php }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        php: [ 8.2, 8.3 ]
 
     services:
       mysql:
@@ -23,7 +33,7 @@ jobs:
           --health-cmd="mysqladmin ping --silent"
           --health-interval=10s
           --health-timeout=5s
-          --health-retries=3
+          --health-retries=5
 
     steps:
       - name: Checkout code
@@ -32,24 +42,23 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: 8.2
-          extensions: mbstring, bcmath, xml, ctype, json, tokenizer, pdo, pdo_mysql
+          php-version: ${{ matrix.php }}
+          extensions: mbstring, bcmath, xml, ctype, json, tokenizer, pdo, pdo_mysql, zip
           coverage: none
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y unzip libzip-dev
 
       - name: Get Composer cache directory
-        id: composer-cache
         run: echo "COMPOSER_CACHE_DIR=$(composer config cache-files-dir)" >> $GITHUB_ENV
 
       - name: Cache Composer dependencies
         uses: actions/cache@v4
         with:
           path: ${{ env.COMPOSER_CACHE_DIR }}
-          key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
+          key: ${{ runner.os }}-php${{ matrix.php }}-composer-${{ hashFiles('**/composer.lock') }}
           restore-keys: |
-            ${{ runner.os }}-composer-
+            ${{ runner.os }}-php${{ matrix.php }}-composer-
 
       - name: Disable Composer advisory blocking
         run: composer config --global policy.advisories.block false
@@ -58,21 +67,21 @@ jobs:
         run: composer install --no-progress --no-suggest --prefer-dist --optimize-autoloader
 
       - name: Copy environment file
-        run: |
-          cp .env.example .env
-          php -r "file_exists('.env') || copy('.env.example', '.env');"
+        run: cp .env.example .env
 
       - name: Generate app key
         run: php artisan key:generate --ansi
 
-      - name: Set database env
+      - name: Configure database environment
         run: |
-          php -r "file_put_contents('.env', str_replace(['DB_CONNECTION=mysql','DB_HOST=127.0.0.1','DB_PORT=3306','DB_DATABASE=inventario_boutique','DB_USERNAME=root','DB_PASSWORD='], ['DB_CONNECTION=mysql','DB_HOST=127.0.0.1','DB_PORT=3306','DB_DATABASE=inventario_boutique','DB_USERNAME=root','DB_PASSWORD=root'], file_get_contents('.env')));"
+          sed -i 's/DB_HOST=127.0.0.1/DB_HOST=127.0.0.1/' .env
+          sed -i 's/DB_PASSWORD=/DB_PASSWORD=root/' .env
 
       - name: Wait for MySQL
         run: |
           until mysqladmin ping -h127.0.0.1 -uroot -proot --silent; do
-            sleep 5
+            echo "Esperando a MySQL..."
+            sleep 3
           done
 
       - name: Run migrations
@@ -84,38 +93,88 @@ jobs:
   deploy:
     name: Deploy to server
     needs: test
-    if: github.ref == 'refs/heads/main' && secrets.DEPLOY_HOST != ''
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && secrets.DEPLOY_HOST != '' && vars.DEPLOY_ENABLED != 'false'
     runs-on: ubuntu-latest
+    environment: production
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Setup SSH agent
-        uses: webfactory/ssh-agent@v0.5.3
+        uses: webfactory/ssh-agent@v0.9.1
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
       - name: Add host to known_hosts
         run: |
           mkdir -p ~/.ssh
-          if [ -n "${{ secrets.DEPLOY_HOST }}" ]; then
-            ssh-keyscan -H ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts
-          fi
+          ssh-keyscan -H ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts
 
-      - name: Sync files to server
+      - name: Define release timestamp
+        id: rel
+        run: echo "ts=$(date +%Y%m%d%H%M%S)" >> $GITHUB_OUTPUT
+
+      - name: Sync files to server (release dir)
         run: |
-          rsync -az --delete --exclude='.git' --exclude='.env' --exclude='storage/' --exclude='vendor/' --exclude='node_modules/' ./ ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ secrets.DEPLOY_DIR }}
+          rsync -az --delete \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.env' \
+            --exclude='storage/' \
+            --exclude='vendor/' \
+            --exclude='node_modules/' \
+            --exclude='tests/' \
+            ./ ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ secrets.DEPLOY_DIR }}/releases/${{ steps.rel.outputs.ts }}/
 
       - name: Run remote deploy commands
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "set -e; cd '${{ secrets.DEPLOY_DIR }}' && \
+          ssh -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "set -e; \
+            cd '${{ secrets.DEPLOY_DIR }}' && \
+            RELEASE='releases/${{ steps.rel.outputs.ts }}' && \
+            cp current/.env \$RELEASE/.env 2>/dev/null || true; \
+            ln -sfn ${{ secrets.DEPLOY_DIR }}/storage \$RELEASE/storage && \
+            cd \$RELEASE && \
             composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader && \
             php artisan migrate --force && \
             php artisan config:cache && \
             php artisan route:cache && \
-            php artisan view:cache || true; \
+            php artisan view:cache && \
             php artisan queue:restart || true; \
-            # Restart PHP-FPM (try common service names) and Supervisor
+            cd '${{ secrets.DEPLOY_DIR }}' && \
+            ln -sfn \$PWD/releases/${{ steps.rel.outputs.ts }} current && \
             sudo systemctl restart php8.2-fpm || sudo systemctl restart php8.1-fpm || sudo systemctl restart php-fpm || true; \
-            sudo systemctl restart supervisor || sudo supervisorctl restart all || true"
+            sudo systemctl restart supervisor || sudo supervisorctl restart all || true; \
+            (ls -t releases | tail -n +6 | xargs -I {} rm -rf releases/{}) || true"
+
+      - name: Health check
+        if: ${{ vars.HEALTH_CHECK_URL != '' }}
+        run: |
+          echo "Verificando salud del despliegue..."
+          for i in {1..6}; do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" ${{ vars.HEALTH_CHECK_URL }} || echo "000")
+            echo "Intento $i -> HTTP $CODE"
+            if [ "$CODE" = "200" ] || [ "$CODE" = "302" ]; then
+              echo "✅ Despliegue saludable (HTTP $CODE)"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "❌ El health check falló tras varios intentos"
+          exit 1
+
+  notify:
+    name: Notificar resultado
+    needs: [ test, deploy ]
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resumen del workflow
+        run: |
+          echo "## 🛍️ Inventario Boutique — Pipeline" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Resultado |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|-----------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 🧪 Tests | ${{ needs.test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🚀 Deploy | ${{ needs.deploy.result }} |" >> $GITHUB_STEP_SUMMARY
