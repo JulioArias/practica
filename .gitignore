@@ -12,3 +12,6 @@ npm-debug.log
 yarn-error.log
 /.idea
 /.vscode
+
+# Base de datos local SQLite
+database/*.sqlite
