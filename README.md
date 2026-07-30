@@ -1,5 +1,7 @@
 # Inventario Boutique
 
+![Laravel CI](https://github.com/JulioArias/practica/actions/workflows/laravel.yml/badge.svg)
+
 Sistema de gestión de inventario para una boutique, desarrollado en **Laravel 11** con vistas en **Bootstrap 5**.
 
 ## Funcionalidades incluidas
